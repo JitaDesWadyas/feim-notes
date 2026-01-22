@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">FEIM Notes</string>
+    <string name="title_activity_main">FEIM Notes</string>
+    <string name="package_name">com.feim.notes</string>
+    <string name="custom_url_scheme">com.feim.notes</string>
+</resources>
