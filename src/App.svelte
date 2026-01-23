@@ -59,9 +59,24 @@
     document.addEventListener('click', closeContextMenu);
     document.addEventListener('touchstart', closeContextMenu);
     
+    // Set header height CSS variable
+    function updateHeaderHeight() {
+      const header = document.querySelector('.header');
+      if (header) {
+        const height = header.getBoundingClientRect().height;
+        document.documentElement.style.setProperty('--header-h', `${height}px`);
+      }
+    }
+    
+    updateHeaderHeight();
+    window.addEventListener('resize', updateHeaderHeight);
+    window.addEventListener('orientationchange', updateHeaderHeight);
+    
     return () => {
       document.removeEventListener('click', closeContextMenu);
       document.removeEventListener('touchstart', closeContextMenu);
+      window.removeEventListener('resize', updateHeaderHeight);
+      window.removeEventListener('orientationchange', updateHeaderHeight);
     };
   });
 
@@ -85,7 +100,7 @@
     clearTimeout(saveTimeout);
     saveTimeout = setTimeout(() => {
       saveTree(tree);
-    }, 400);
+    }, 1000); // Increased from 400ms to reduce save frequency
   }
 
   function handleSelect(event) {
@@ -99,7 +114,7 @@
     if (node) {
       node.collapsed = !node.collapsed;
       tree = tree;
-      pushHistory();
+      scheduleSave(); // Don't push to history for simple expand/collapse
     }
   }
 
@@ -167,6 +182,26 @@
     closeContextMenu();
   }
 
+  function handleMenuAddSibling() {
+    if (contextMenuNode) {
+      const result = findParentAndIndex(tree.roots, contextMenuNode.id);
+      if (result) {
+        const { siblings, index } = result;
+        const newNode = {
+          id: crypto.randomUUID(),
+          text: '',
+          collapsed: true,
+          children: []
+        };
+        siblings.splice(index + 1, 0, newNode);
+        tree = tree;
+        pushHistory();
+        selectedNodeId = newNode.id;
+      }
+    }
+    closeContextMenu();
+  }
+
   function handleMenuDelete() {
     if (contextMenuNode && confirm(`Delete "${contextMenuNode.text}" and all its children?`)) {
       deleteNodeById(tree.roots, contextMenuNode.id);
@@ -204,7 +239,7 @@
       if (result && result.index > 0) {
         const { siblings, index } = result;
         [siblings[index - 1], siblings[index]] = [siblings[index], siblings[index - 1]];
-        tree = tree;
+        tree = { ...tree }; // Force reactivity
         pushHistory();
       }
     }
@@ -217,7 +252,7 @@
       if (result && result.index < result.siblings.length - 1) {
         const { siblings, index } = result;
         [siblings[index], siblings[index + 1]] = [siblings[index + 1], siblings[index]];
-        tree = tree;
+        tree = { ...tree }; // Force reactivity
         pushHistory();
       }
     }
@@ -431,6 +466,9 @@
         on:contextmenu={handleContextMenu}
       />
     {/each}
+    
+    <!-- Spacer to ensure always scrollable -->
+    <div class="scroll-spacer"></div>
   </div>
 
   <!-- Context Menu -->
@@ -442,6 +480,7 @@
       hasClipboard={!!clipboard}
       on:edit={handleMenuEdit}
       on:addChild={handleMenuAddChild}
+      on:addSibling={handleMenuAddSibling}
       on:delete={handleMenuDelete}
       on:copy={handleMenuCopy}
       on:paste={handleMenuPaste}
@@ -452,15 +491,20 @@
 </div>
 
 <style>
+  :global(html) {
+    overflow-y: scroll;
+  }
+
   :global(body) {
     background: #0f0e11;
     color: #f4efe6;
     margin: 0;
     padding: 0;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-    overflow: hidden;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    touch-action: manipulation;
+    min-height: 100vh;
     /* FEIM OTT texture */
     background-image: 
       radial-gradient(1200px 800px at 15% -15%, rgba(160, 140, 110, 0.05), transparent 60%),
@@ -485,11 +529,9 @@
   }
 
   .app {
-    height: 100vh;
+    min-height: 100vh;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
-    position: relative;
   }
 
   /* FEIM OTT exact header style */
@@ -501,10 +543,10 @@
     display: flex;
     align-items: center;
     gap: 24px;
-    height: 56px;
     box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.5);
-    position: relative;
-    z-index: 100;
+    position: sticky;
+    top: 0;
+    z-index: 1000;
     overflow: visible;
   }
 
@@ -653,15 +695,19 @@
 
   .tree-area {
     flex: 1;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding: 24px 32px;
+    padding: 24px 32px 24px 32px;
     max-width: 1100px;
     margin: 0 auto;
     width: 100%;
     background: #0f0e11;
     position: relative;
     z-index: 1;
+  }
+
+  .scroll-spacer {
+    height: 100vh;
+    min-height: 600px;
+    pointer-events: none;
   }
 
   .tree-area::-webkit-scrollbar {

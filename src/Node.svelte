@@ -10,6 +10,9 @@
   
   const dispatch = createEventDispatcher();
   
+  // Cache the local max depth calculation
+  let cachedLocalMaxDepth = 0;
+  
   // Calculate local max depth for this subtree
   function calculateLocalMaxDepth(n, currentDepth = 0) {
     let max = currentDepth;
@@ -21,10 +24,13 @@
     return max;
   }
   
-  // For root nodes, calculate their own max depth
+  // For root nodes, calculate their own max depth only when node structure changes
   $: if (depth === 0) {
-    localMaxDepth = calculateLocalMaxDepth(node);
+    cachedLocalMaxDepth = calculateLocalMaxDepth(node);
   }
+  
+  // Pass down cached value to children
+  $: localMaxDepth = depth === 0 ? cachedLocalMaxDepth : localMaxDepth;
   
   // Calculate line width percentage based on depth relative to local max
   $: lineWidthPercent = localMaxDepth > 0 ? ((depth + 1) / (localMaxDepth + 1)) * 100 : 0;
@@ -128,13 +134,17 @@
         input.innerText = editText;
         input.focus();
         
-        // Scroll into view for mobile keyboard
+        // Scroll into view with proper offset for fixed header
         setTimeout(() => {
-          input.scrollIntoView({ 
-            behavior: 'smooth', 
-            block: 'center',
-            inline: 'nearest'
-          });
+          const rect = input.getBoundingClientRect();
+          const scrollContainer = document.querySelector('.tree-area');
+          if (scrollContainer && rect.top < 100) {
+            // If element is too close to top (under header), scroll it down
+            scrollContainer.scrollBy({
+              top: rect.top - 120,
+              behavior: 'smooth'
+            });
+          }
         }, 300);
         
         // Move cursor to end
@@ -194,8 +204,8 @@
   style="--node-depth: {depth}; --line-width: {lineWidthPercent}%;"
   data-node-id={node.id}
 >
-  <!-- Vertical line for root groups (only on depth 0 with children) -->
-  {#if depth === 0 && node.children && node.children.length > 0 && !node.collapsed}
+  <!-- Vertical line for root groups (always show if root has children, even when collapsed) -->
+  {#if depth === 0 && node.children && node.children.length > 0}
     <div class="root-vertical-line"></div>
   {/if}
 
@@ -340,8 +350,39 @@
     user-select: none;
     -webkit-user-select: none;
     -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
     position: relative;
     margin: 4px 0;
+  }
+
+  /* Subtle color variations by depth with saturation */
+  .node[data-depth="0"] .node-content {
+    background: linear-gradient(135deg, #3e3b47 0%, #1e1c24 100%);
+  }
+
+  .node[data-depth="1"] .node-content {
+    background: linear-gradient(135deg, #3a3843 0%, #1b1921 100%);
+  }
+
+  .node[data-depth="2"] .node-content {
+    background: linear-gradient(135deg, #36343e 0%, #18161e 100%);
+  }
+
+  .node[data-depth="3"] .node-content {
+    background: linear-gradient(135deg, #33313a 0%, #16141b 100%);
+  }
+
+  .node[data-depth="4"] .node-content {
+    background: linear-gradient(135deg, #302e37 0%, #151319 100%);
+  }
+
+  .node[data-depth="5"] .node-content,
+  .node[data-depth="6"] .node-content,
+  .node[data-depth="7"] .node-content,
+  .node[data-depth="8"] .node-content,
+  .node[data-depth="9"] .node-content,
+  .node[data-depth="10"] .node-content {
+    background: linear-gradient(135deg, #2d2b34 0%, #141218 100%);
   }
 
   /* Depth indicator lines - ONLY top border */

@@ -29,6 +29,11 @@
       <span>Add Child</span>
     </button>
     
+    <button class="menu-item" on:click={() => handleAction('addSibling')}>
+      <span class="menu-icon">⊕</span>
+      <span>Add Sibling</span>
+    </button>
+    
     <div class="menu-divider"></div>
     
     <button class="menu-item" on:click={() => handleAction('copy')}>
