@@ -6,11 +6,28 @@
   export let maxDepth = 0;
   export let selectedNodeId = null;
   export let isAnyNodeEditing = false;
+  export let localMaxDepth = 0; // Max depth within this root's subtree
   
   const dispatch = createEventDispatcher();
   
-  // Calculate line width percentage based on depth (deeper = longer)
-  $: lineWidthPercent = maxDepth > 0 ? (depth / maxDepth) * 100 : 0;
+  // Calculate local max depth for this subtree
+  function calculateLocalMaxDepth(n, currentDepth = 0) {
+    let max = currentDepth;
+    if (n.children && n.children.length > 0) {
+      for (const child of n.children) {
+        max = Math.max(max, calculateLocalMaxDepth(child, currentDepth + 1));
+      }
+    }
+    return max;
+  }
+  
+  // For root nodes, calculate their own max depth
+  $: if (depth === 0) {
+    localMaxDepth = calculateLocalMaxDepth(node);
+  }
+  
+  // Calculate line width percentage based on depth relative to local max
+  $: lineWidthPercent = localMaxDepth > 0 ? ((depth + 1) / (localMaxDepth + 1)) * 100 : 0;
   
   let editing = false;
   let editText = node.text;
@@ -177,6 +194,11 @@
   style="--node-depth: {depth}; --line-width: {lineWidthPercent}%;"
   data-node-id={node.id}
 >
+  <!-- Vertical line for root groups (only on depth 0 with children) -->
+  {#if depth === 0 && node.children && node.children.length > 0 && !node.collapsed}
+    <div class="root-vertical-line"></div>
+  {/if}
+
   <div 
     class="node-content"
     class:selected={isSelected}
@@ -231,6 +253,7 @@
           node={child} 
           depth={depth + 1}
           {maxDepth}
+          localMaxDepth={depth === 0 ? localMaxDepth : localMaxDepth}
           {selectedNodeId}
           bind:isAnyNodeEditing
           on:select
@@ -248,6 +271,19 @@
     position: relative;
   }
 
+  /* Vertical line for root groups */
+  .root-vertical-line {
+    position: absolute;
+    left: -1px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: #fbbf24;
+    border-radius: 1px;
+    box-shadow: 0 0 4px rgba(251, 191, 36, 0.4);
+    z-index: 10;
+  }
+
   /* Root nodes (depth 0) */
   .node[data-depth="0"] {
     margin: 0 0 24px 0;
@@ -260,7 +296,7 @@
     letter-spacing: -0.01em;
   }
 
-  /* All child nodes - same styling */
+  /* All child nodes - same styling and spacing */
   .node[data-depth="1"],
   .node[data-depth="2"],
   .node[data-depth="3"],
@@ -271,7 +307,7 @@
   .node[data-depth="8"],
   .node[data-depth="9"],
   .node[data-depth="10"] {
-    margin: 0 0 8px 0;
+    margin: 0 0 12px 0;
     position: relative;
   }
 
@@ -308,29 +344,22 @@
     margin: 4px 0;
   }
 
-  /* Depth indicator lines - top and bottom borders */
-  .node-content::before,
-  .node-content::after {
+  /* Depth indicator lines - ONLY top border */
+  .node-content::before {
     content: '';
     position: absolute;
     left: 0;
+    top: -1px;
     height: 2px;
     width: var(--line-width, 0%);
-    background: rgba(251, 191, 36, 0.3);
+    background: #fbbf24;
+    border-radius: 1px;
+    box-shadow: 0 0 4px rgba(251, 191, 36, 0.4);
     transition: all 0.15s ease;
   }
 
-  .node-content::before {
-    top: -1px;
-  }
-
-  .node-content::after {
-    bottom: -1px;
-  }
-
-  .node-content.selected::before,
-  .node-content.selected::after {
-    background: rgba(251, 191, 36, 0.5);
+  .node-content.selected::before {
+    box-shadow: 0 0 6px rgba(251, 191, 36, 0.6);
   }
 
   .node-content:hover {
@@ -397,16 +426,6 @@
   }
 
   .node-children {
-    margin: 8px 0 0 0;
-  }
-
-  /* Root children spacing */
-  .node[data-depth="0"] > .node-children {
-    margin: 12px 0 0 0;
-  }
-
-  /* Section children spacing */
-  .node[data-depth="1"] > .node-children {
     margin: 12px 0 0 0;
   }
 </style>
