@@ -32,22 +32,6 @@ export async function loadTree() {
 export function createDefaultTree() {
   return {
     version: 1,
-    roots: [
-      {
-        id: crypto.randomUUID(),
-        text: 'FEIM',
-        collapsed: false,
-        children: [
-          { id: crypto.randomUUID(), text: '00 Inbox', collapsed: true, children: [] },
-          { id: crypto.randomUUID(), text: '10 Lore', collapsed: true, children: [] },
-          { id: crypto.randomUUID(), text: '20 Regions', collapsed: true, children: [] },
-          { id: crypto.randomUUID(), text: '30 NPC', collapsed: true, children: [] },
-          { id: crypto.randomUUID(), text: '40 Monsters', collapsed: true, children: [] },
-          { id: crypto.randomUUID(), text: '50 Items / Discs', collapsed: true, children: [] },
-          { id: crypto.randomUUID(), text: '60 Quests / Campaign', collapsed: true, children: [] },
-          { id: crypto.randomUUID(), text: '90 Dev TODO', collapsed: true, children: [] },
-        ]
-      }
-    ]
+    roots: []
   };
 }

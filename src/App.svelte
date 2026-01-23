@@ -17,18 +17,42 @@
   let searchQuery = '';
   let clipboard = null;
   let selectedNodeId = null;
+  let maxDepth = 0;
+  let isAnyNodeEditing = false;
+  
+  // Calculate max depth in tree
+  function calculateMaxDepth(nodes, currentDepth = 0) {
+    let max = currentDepth;
+    for (const node of nodes) {
+      if (node.children && node.children.length > 0) {
+        const childMax = calculateMaxDepth(node.children, currentDepth + 1);
+        max = Math.max(max, childMax);
+      }
+    }
+    return max;
+  }
+  
+  $: maxDepth = calculateMaxDepth(tree.roots);
   
   // Context menu state
   let contextMenuVisible = false;
   let contextMenuX = 0;
   let contextMenuY = 0;
   let contextMenuNode = null;
+  let longPressTimer = null;
+  let settingsMenuVisible = false;
 
   onMount(async () => {
     const saved = await loadTree();
     if (saved) {
       tree = saved;
     }
+    
+    // Ensure roots array exists
+    if (!tree.roots) {
+      tree.roots = [];
+    }
+    
     pushHistory();
     
     // Close context menu on click outside
@@ -44,6 +68,8 @@
   function closeContextMenu() {
     contextMenuVisible = false;
     contextMenuNode = null;
+    settingsMenuVisible = false;
+    selectedNodeId = null;
   }
 
   function pushHistory() {
@@ -63,6 +89,7 @@
   }
 
   function handleSelect(event) {
+    event.stopPropagation?.();
     selectedNodeId = event.detail.nodeId;
   }
 
@@ -95,6 +122,10 @@
       contextMenuY = event.detail.y;
       contextMenuVisible = true;
     }
+  }
+
+  function isRootNode(nodeId) {
+    return tree.roots.some(root => root.id === nodeId);
   }
 
   function handleMenuEdit() {
@@ -193,6 +224,121 @@
     closeContextMenu();
   }
 
+  function handleHeaderTouchStart(e) {
+    longPressTimer = setTimeout(() => {
+      showHeaderContextMenu(e.touches[0].clientX, e.touches[0].clientY);
+    }, 500);
+  }
+
+  function handleHeaderTouchEnd(e) {
+    clearTimeout(longPressTimer);
+  }
+
+  function handleHeaderTouchMove() {
+    clearTimeout(longPressTimer);
+  }
+
+  function handleHeaderContextMenu(e) {
+    e.preventDefault();
+    showHeaderContextMenu(e.clientX, e.clientY);
+  }
+
+  function showHeaderContextMenu(x, y) {
+    if (tree.roots && tree.roots.length > 0) {
+      contextMenuNode = tree.roots[0];
+      contextMenuX = x;
+      contextMenuY = y;
+      contextMenuVisible = true;
+    }
+  }
+
+  function handleUndo() {
+    if (historyIndex > 0) {
+      historyIndex--;
+      tree = JSON.parse(JSON.stringify(history[historyIndex]));
+      scheduleSave();
+    }
+  }
+
+  function handleRedo() {
+    if (historyIndex < history.length - 1) {
+      historyIndex++;
+      tree = JSON.parse(JSON.stringify(history[historyIndex]));
+      scheduleSave();
+    }
+  }
+
+  function handleAddRootChild() {
+    const newNode = {
+      id: crypto.randomUUID(),
+      text: '',
+      collapsed: true,
+      children: []
+    };
+    
+    // Add as a new root node
+    tree.roots.push(newNode);
+    tree = tree;
+    pushHistory();
+    selectedNodeId = newNode.id;
+    
+    // Auto-edit the new node
+    setTimeout(() => {
+      const element = document.querySelector(`[data-node-id="${newNode.id}"]`);
+      if (element) {
+        const event = new CustomEvent('dblclick');
+        element.querySelector('.node-content')?.dispatchEvent(event);
+      }
+    }, 50);
+  }
+
+  function toggleSettingsMenu(e) {
+    e.stopPropagation();
+    settingsMenuVisible = !settingsMenuVisible;
+  }
+
+  function handleExportJSON() {
+    const dataStr = JSON.stringify(tree, null, 2);
+    const dataBlob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(dataBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `feim-notes-${new Date().toISOString().split('T')[0]}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    settingsMenuVisible = false;
+  }
+
+  function handleImportJSON() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json';
+    input.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+          try {
+            const imported = JSON.parse(event.target.result);
+            if (imported.roots && Array.isArray(imported.roots)) {
+              tree = imported;
+              await saveTree(tree);
+              pushHistory();
+              alert('Import successful!');
+            } else {
+              alert('Invalid JSON format');
+            }
+          } catch (err) {
+            alert('Error parsing JSON file');
+          }
+        };
+        reader.readAsText(file);
+      }
+    };
+    input.click();
+    settingsMenuVisible = false;
+  }
+
   function handleSearch(e) {
     if (e.key === 'Enter' && searchQuery.trim()) {
       searchInTree(tree.roots, searchQuery.toLowerCase());
@@ -225,6 +371,40 @@
   <!-- Header -->
   <header class="header">
     <h1>FEIM Notes</h1>
+    
+    <div class="header-actions">
+      <button class="action-btn" on:click={handleUndo} disabled={historyIndex <= 0} title="Undo">
+        <span class="action-icon">↶</span>
+      </button>
+      
+      <button class="action-btn" on:click={handleRedo} disabled={historyIndex >= history.length - 1} title="Redo">
+        <span class="action-icon">↷</span>
+      </button>
+      
+      <button class="action-btn primary" on:click={handleAddRootChild} title="Add new note">
+        <span class="action-icon">+</span>
+      </button>
+      
+      <div class="settings-wrapper">
+        <button class="action-btn" on:click={toggleSettingsMenu} title="Settings">
+          <span class="action-icon">⚙</span>
+        </button>
+        
+        {#if settingsMenuVisible}
+          <div class="settings-menu" on:click|stopPropagation on:touchstart|stopPropagation>
+            <button class="settings-item" on:click={handleExportJSON}>
+              <span class="settings-icon">📤</span>
+              <span>Export JSON</span>
+            </button>
+            <button class="settings-item" on:click={handleImportJSON}>
+              <span class="settings-icon">📥</span>
+              <span>Import JSON</span>
+            </button>
+          </div>
+        {/if}
+      </div>
+    </div>
+    
     <div class="search-container">
       <input 
         type="search" 
@@ -237,12 +417,14 @@
   </header>
 
   <!-- Tree Area (full width) -->
-  <div class="tree-area">
+  <div class="tree-area" on:click={() => selectedNodeId = null}>
     {#each tree.roots as node (node.id)}
       <Node 
         {node} 
         depth={0}
+        {maxDepth}
         {selectedNodeId}
+        bind:isAnyNodeEditing
         on:select={handleSelect}
         on:toggle={handleToggle}
         on:edit={handleEdit}
@@ -322,7 +504,8 @@
     height: 56px;
     box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.5);
     position: relative;
-    z-index: 1;
+    z-index: 100;
+    overflow: visible;
   }
 
   h1 {
@@ -332,7 +515,112 @@
     color: #fbbf24;
     letter-spacing: -0.01em;
     text-transform: none;
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .action-btn {
+    background: #25232a;
+    border: 1px solid #4a3a2c;
+    color: #d3c9bb;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 1.125rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+    min-width: 36px;
+    height: 36px;
+  }
+
+  .action-btn:hover:not(:disabled) {
+    background: #2d2b32;
+    border-color: #5a4634;
+    color: #f4efe6;
+  }
+
+  .action-btn:active:not(:disabled) {
+    background: #1a181d;
+  }
+
+  .action-btn.primary {
+    background: #fbbf24;
+    border-color: #fbbf24;
+    color: #0f0e11;
+  }
+
+  .action-btn.primary:hover {
+    background: #fcd34d;
+    border-color: #fcd34d;
+    color: #0f0e11;
+  }
+
+  .action-btn.primary:active {
+    background: #f59e0b;
+    border-color: #f59e0b;
+  }
+
+  .action-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  .action-icon {
+    line-height: 1;
+    font-size: 1.125rem;
+  }
+
+  .settings-wrapper {
     position: relative;
+    z-index: 1060;
+  }
+
+  .settings-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    background: #1a181d;
+    border: 1px solid #4a3a2c;
+    border-radius: 4px;
+    box-shadow: 0 3px 6px -1px rgba(0, 0, 0, 0.6), 0 2px 4px -1px rgba(0, 0, 0, 0.5);
+    min-width: 180px;
+    padding: 8px;
+    z-index: 1070;
+    backdrop-filter: blur(8px);
+  }
+
+  .settings-item {
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: #d3c9bb;
+    padding: 10px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    transition: all 0.15s ease;
+    text-align: left;
+  }
+
+  .settings-item:hover {
+    background: #25232a;
+    color: #f4efe6;
+  }
+
+  .settings-icon {
+    font-size: 1rem;
+    width: 18px;
+    text-align: center;
   }
 
   .search-container {
@@ -403,6 +691,22 @@
     }
 
     h1 {
+      font-size: 1rem;
+      flex: 1;
+    }
+
+    .header-actions {
+      order: 2;
+      flex-shrink: 0;
+    }
+
+    .action-btn {
+      padding: 6px 10px;
+      min-width: 32px;
+      height: 32px;
+    }
+
+    .action-icon {
       font-size: 1rem;
     }
 

@@ -14,7 +14,7 @@
 </script>
 
 {#if node}
-  <div class="context-menu" style="left: {x}px; top: {y}px;">
+  <div class="context-menu" style="left: {x}px; top: {y}px;" on:click|stopPropagation on:touchstart|stopPropagation>
     <div class="menu-header">
       <div class="menu-title">{node.text || '(empty)'}</div>
     </div>
