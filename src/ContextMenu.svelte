@@ -16,7 +16,7 @@
 {#if node}
   <div class="context-menu" style="left: {x}px; top: {y}px;" on:click|stopPropagation on:touchstart|stopPropagation>
     <div class="menu-header">
-      <div class="menu-title">{node.text || '(empty)'}</div>
+      <div class="menu-title">{node.title || node.text || '(empty)'}</div>
     </div>
     
     <button class="menu-item" on:click={() => handleAction('edit')}>
@@ -26,12 +26,12 @@
     
     <button class="menu-item" on:click={() => handleAction('addChild')}>
       <span class="menu-icon">+</span>
-      <span>Add Child</span>
+      <span>New Sub-note</span>
     </button>
     
     <button class="menu-item" on:click={() => handleAction('addSibling')}>
-      <span class="menu-icon">⊕</span>
-      <span>Add Sibling</span>
+      <span class="menu-icon">🔗</span>
+      <span>Link to...</span>
     </button>
     
     <div class="menu-divider"></div>
@@ -41,23 +41,11 @@
       <span>Copy</span>
     </button>
     
-    {#if hasClipboard}
-      <button class="menu-item" on:click={() => handleAction('paste')}>
-        <span class="menu-icon">📥</span>
-        <span>Paste</span>
-      </button>
-    {/if}
-    
     <div class="menu-divider"></div>
     
     <button class="menu-item" on:click={() => handleAction('moveUp')}>
-      <span class="menu-icon">↑</span>
-      <span>Move Up</span>
-    </button>
-    
-    <button class="menu-item" on:click={() => handleAction('moveDown')}>
-      <span class="menu-icon">↓</span>
-      <span>Move Down</span>
+      <span class="menu-icon">✂</span>
+      <span>Remove from here</span>
     </button>
     
     <div class="menu-divider"></div>

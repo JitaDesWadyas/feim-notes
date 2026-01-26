@@ -3,82 +3,80 @@
   import { fade } from 'svelte/transition';
   import { flip } from 'svelte/animate';
   import { quintOut } from 'svelte/easing';
-  import { saveGraph, loadGraph, createDefaultGraph } from './db.js';
-  import { router, currentView, currentCategoryId, currentNoteId } from './router.js';
-  import { Node } from './models/Node.js';
-  import { Edge } from './models/Edge.js';
-  import { Category } from './models/Category.js';
+  import { saveTree, loadTree, createDefaultTree } from './db.js';
+  import { 
+    findNodeById, 
+    findParentAndIndex, 
+    deleteNodeById, 
+    cloneNode 
+  } from './treeUtils.js';
+  import { router, currentView, currentCategoryId } from './router.js';
   import OverviewCard from './OverviewCard.svelte';
-  import Workspace from './components/Workspace.svelte';
+  import CategoryView from './CategoryView.svelte';
   import ContextMenu from './ContextMenu.svelte';
 
-  let data = createDefaultGraph();
-  let categories = [];
-  let nodes = [];
-  let edges = [];
+  let tree = createDefaultTree();
   let history = [];
   let historyIndex = -1;
   let saveTimeout = null;
   let searchQuery = '';
   let clipboard = null;
   let selectedNodeId = null;
+  let isAnyNodeEditing = false;
   let globalSearchMode = false;
   
-  $: categories = data.categories || [];
-  $: nodes = data.nodes || [];
-  $: edges = data.edges || [];
-  
+  // Get current category for drill-down view
   $: currentCategory = $currentCategoryId 
-    ? categories.find(c => c.id === $currentCategoryId)
+    ? findNodeById(tree.roots, $currentCategoryId)
     : null;
   
+  // Filter categories for overview (with search)
   $: filteredCategories = searchQuery && !globalSearchMode
-    ? categories.filter(cat => 
-        cat.title.toLowerCase().includes(searchQuery.toLowerCase())
+    ? tree.roots.filter(cat => 
+        cat.text.toLowerCase().includes(searchQuery.toLowerCase())
       )
-    : categories;
+    : tree.roots;
   
   // Context menu state
   let contextMenuVisible = false;
   let contextMenuX = 0;
   let contextMenuY = 0;
   let contextMenuNode = null;
-  let contextMenuEdge = null;
+  let longPressTimer = null;
   let settingsMenuVisible = false;
 
   onMount(async () => {
-    try {
-      const saved = await loadGraph();
-      if (saved) {
-        data = saved;
-        categories = data.categories;
-        nodes = data.nodes;
-        edges = data.edges;
-      }
-    } catch (err) {
-      console.error('Failed to load graph:', err);
-      // Continue with empty data
+    const saved = await loadTree();
+    if (saved) {
+      tree = saved;
     }
     
+    // Ensure roots array exists
+    if (!tree.roots) {
+      tree.roots = [];
+    }
+    
+    // Initialize router from URL
     router.initFromURL();
     
+    // Update router path if we have a category ID
     if ($currentCategoryId) {
-      const cat = categories.find(c => c.id === $currentCategoryId);
+      const cat = findNodeById(tree.roots, $currentCategoryId);
       if (cat) {
-        router.update(state => ({ ...state, path: [cat.title] }));
-        if ($currentNoteId) {
-          selectedNodeId = $currentNoteId;
-        }
+        router.update(state => ({ ...state, path: [cat.text] }));
       } else {
+        // Category not found, go to overview
         router.navigateToOverview();
       }
     }
     
     pushHistory();
     
+    // Close context menu on click outside
     document.addEventListener('click', closeContextMenu);
     document.addEventListener('touchstart', closeContextMenu);
     
+    // Set header height CSS variable
     function updateHeaderHeight() {
       const header = document.querySelector('.header');
       if (header) {
@@ -99,28 +97,27 @@
     };
   });
 
-  function closeContextMenu(e) {
-    // Only close context menu, don't clear selection
+  function closeContextMenu() {
     contextMenuVisible = false;
     contextMenuNode = null;
-    contextMenuEdge = null;
     settingsMenuVisible = false;
+    selectedNodeId = null;
   }
 
   function pushHistory() {
     if (historyIndex < history.length - 1) {
       history = history.slice(0, historyIndex + 1);
     }
-    history.push(JSON.parse(JSON.stringify({ categories, nodes, edges })));
+    history.push(JSON.parse(JSON.stringify(tree)));
     historyIndex++;
     scheduleSave();
   }
 
   function scheduleSave() {
     clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(async () => {
-      await saveGraph(categories, nodes, edges);
-    }, 1000);
+    saveTimeout = setTimeout(() => {
+      saveTree(tree);
+    }, 1000); // Increased from 400ms to reduce save frequency
   }
 
   function handleSelect(event) {
@@ -128,61 +125,51 @@
     selectedNodeId = event.detail.nodeId;
   }
 
-  function handleContextMenu(event) {
-    event.detail && event.detail.nodeId && (selectedNodeId = event.detail.nodeId);
-    
-    if ($currentView === 'overview') {
-      const cat = categories.find(c => c.id === event.detail.nodeId);
-      if (cat) {
-        contextMenuNode = { id: cat.id, title: cat.title };
-      }
-    } else {
-      const node = nodes.find(n => n.id === event.detail.nodeId);
-      if (node) {
-        contextMenuNode = node;
-        contextMenuEdge = event.detail.edge || null;
-      }
+  function handleToggle(event) {
+    const { nodeId } = event.detail;
+    const node = findNodeById(tree.roots, nodeId);
+    if (node) {
+      node.collapsed = !node.collapsed;
+      tree = tree;
+      scheduleSave(); // Don't push to history for simple expand/collapse
     }
-    
-    contextMenuX = event.detail.x;
-    contextMenuY = event.detail.y;
-    contextMenuVisible = true;
   }
 
-  function handleAddRootChild() {
-    if ($currentView === 'workspace' && currentCategory) {
-      // Add new node to current category
-      const newNode = new Node({
-        categoryId: currentCategory.id,
-        title: '',
-        contentMd: ''
-      });
-      nodes.push(newNode);
-      nodes = nodes;
-      selectedNodeId = newNode.id;
-      router.navigateToNote(currentCategory.id, newNode.id);
-      pushHistory();
-    } else {
-      // Add new category
-      const newCategory = new Category({
-        title: '',
-        order: categories.length
-      });
-      categories.push(newCategory);
-      categories = categories;
-      selectedNodeId = newCategory.id;
+  function handleEdit(event) {
+    const { nodeId, text } = event.detail;
+    const node = findNodeById(tree.roots, nodeId);
+    if (node) {
+      node.text = text;
+      tree = tree;
       pushHistory();
     }
+  }
+
+  function handleContextMenu(event) {
+    event.detail && event.detail.nodeId && (selectedNodeId = event.detail.nodeId);
+    const node = findNodeById(tree.roots, event.detail.nodeId);
+    if (node) {
+      contextMenuNode = node;
+      contextMenuX = event.detail.x;
+      contextMenuY = event.detail.y;
+      contextMenuVisible = true;
+    }
+  }
+
+  function isRootNode(nodeId) {
+    return tree.roots.some(root => root.id === nodeId);
   }
 
   function handleMenuEdit() {
     if (contextMenuNode) {
+      // Use a small delay to allow context menu to close first
       setTimeout(() => {
         const element = document.querySelector(`[data-node-id="${contextMenuNode.id}"]`);
         if (element) {
+          // Simulate double-click on the card/node content
           const event = new Event('dblclick', { bubbles: true });
           const contentEl = element.querySelector('.card-content') || 
-                           element.querySelector('.nav-row');
+                           element.querySelector('.node-content');
           if (contentEl) {
             contentEl.dispatchEvent(event);
           }
@@ -193,64 +180,50 @@
   }
 
   function handleMenuAddChild() {
-    if (contextMenuNode && $currentView === 'workspace') {
-      const newNode = new Node({
-        categoryId: currentCategory.id,
-        title: '',
-        contentMd: ''
-      });
-      nodes.push(newNode);
-      
-      const maxOrder = edges
-        .filter(e => e.fromId === contextMenuNode.id && e.kind === 'contains')
-        .reduce((max, e) => Math.max(max, e.order), -1);
-      
-      const newEdge = new Edge({
-        categoryId: currentCategory.id,
-        fromId: contextMenuNode.id,
-        toId: newNode.id,
-        kind: 'contains',
-        order: maxOrder + 1
-      });
-      edges.push(newEdge);
-      
-      nodes = nodes;
-      edges = edges;
-      pushHistory();
+    if (contextMenuNode) {
+      const parent = findNodeById(tree.roots, contextMenuNode.id);
+      if (parent) {
+        parent.collapsed = false;
+        const newNode = {
+          id: crypto.randomUUID(),
+          text: '',
+          collapsed: true,
+          children: []
+        };
+        parent.children.push(newNode);
+        tree = tree;
+        pushHistory();
+        selectedNodeId = newNode.id;
+      }
     }
     closeContextMenu();
   }
 
-  function handleMenuLink() {
-    // TODO: Implement link creation dialog
-    closeContextMenu();
-  }
-
-  function handleMenuRemoveEdge() {
-    if (contextMenuEdge) {
-      edges = edges.filter(e => e.id !== contextMenuEdge.id);
-      pushHistory();
+  function handleMenuAddSibling() {
+    if (contextMenuNode) {
+      const result = findParentAndIndex(tree.roots, contextMenuNode.id);
+      if (result) {
+        const { siblings, index } = result;
+        const newNode = {
+          id: crypto.randomUUID(),
+          text: '',
+          collapsed: true,
+          children: []
+        };
+        siblings.splice(index + 1, 0, newNode);
+        tree = tree;
+        pushHistory();
+        selectedNodeId = newNode.id;
+      }
     }
     closeContextMenu();
   }
 
   function handleMenuDelete() {
-    if (!contextMenuNode) return;
-    
-    const isCategory = $currentView === 'overview';
-    const itemType = isCategory ? 'category' : 'node';
-    const title = contextMenuNode.title || 'Untitled';
-    
-    if (confirm(`Delete ${itemType} "${title}"${isCategory ? ' and all its notes' : ''}?`)) {
-      if (isCategory) {
-        categories = categories.filter(c => c.id !== contextMenuNode.id);
-        nodes = nodes.filter(n => n.categoryId !== contextMenuNode.id);
-        edges = edges.filter(e => e.categoryId !== contextMenuNode.id);
-      } else {
-        nodes = nodes.filter(n => n.id !== contextMenuNode.id);
-        edges = edges.filter(e => e.fromId !== contextMenuNode.id && e.toId !== contextMenuNode.id);
-      }
+    if (contextMenuNode && confirm(`Delete "${contextMenuNode.text}" and all its children?`)) {
+      deleteNodeById(tree.roots, contextMenuNode.id);
       selectedNodeId = null;
+      tree = tree;
       pushHistory();
     }
     closeContextMenu();
@@ -263,16 +236,78 @@
     closeContextMenu();
   }
 
+  function handleMenuPaste() {
+    if (contextMenuNode && clipboard) {
+      const parent = findNodeById(tree.roots, contextMenuNode.id);
+      if (parent) {
+        parent.collapsed = false;
+        const newNode = cloneNode(clipboard);
+        parent.children.push(newNode);
+        tree = tree;
+        pushHistory();
+      }
+    }
+    closeContextMenu();
+  }
+
+  function handleMenuMoveUp() {
+    if (contextMenuNode) {
+      const result = findParentAndIndex(tree.roots, contextMenuNode.id);
+      if (result && result.index > 0) {
+        const { siblings, index } = result;
+        [siblings[index - 1], siblings[index]] = [siblings[index], siblings[index - 1]];
+        tree = { ...tree }; // Force reactivity
+        pushHistory();
+      }
+    }
+    closeContextMenu();
+  }
+
+  function handleMenuMoveDown() {
+    if (contextMenuNode) {
+      const result = findParentAndIndex(tree.roots, contextMenuNode.id);
+      if (result && result.index < result.siblings.length - 1) {
+        const { siblings, index } = result;
+        [siblings[index], siblings[index + 1]] = [siblings[index + 1], siblings[index]];
+        tree = { ...tree }; // Force reactivity
+        pushHistory();
+      }
+    }
+    closeContextMenu();
+  }
+
+  function handleHeaderTouchStart(e) {
+    longPressTimer = setTimeout(() => {
+      showHeaderContextMenu(e.touches[0].clientX, e.touches[0].clientY);
+    }, 500);
+  }
+
+  function handleHeaderTouchEnd(e) {
+    clearTimeout(longPressTimer);
+  }
+
+  function handleHeaderTouchMove() {
+    clearTimeout(longPressTimer);
+  }
+
+  function handleHeaderContextMenu(e) {
+    e.preventDefault();
+    showHeaderContextMenu(e.clientX, e.clientY);
+  }
+
+  function showHeaderContextMenu(x, y) {
+    if (tree.roots && tree.roots.length > 0) {
+      contextMenuNode = tree.roots[0];
+      contextMenuX = x;
+      contextMenuY = y;
+      contextMenuVisible = true;
+    }
+  }
+
   function handleUndo() {
     if (historyIndex > 0) {
       historyIndex--;
-      const state = JSON.parse(JSON.stringify(history[historyIndex]));
-      data.categories = state.categories.map(c => Category.fromJSON(c));
-      data.nodes = state.nodes.map(n => Node.fromJSON(n));
-      data.edges = state.edges.map(e => Edge.fromJSON(e));
-      categories = data.categories;
-      nodes = data.nodes;
-      edges = data.edges;
+      tree = JSON.parse(JSON.stringify(history[historyIndex]));
       scheduleSave();
     }
   }
@@ -280,15 +315,46 @@
   function handleRedo() {
     if (historyIndex < history.length - 1) {
       historyIndex++;
-      const state = JSON.parse(JSON.stringify(history[historyIndex]));
-      data.categories = state.categories.map(c => Category.fromJSON(c));
-      data.nodes = state.nodes.map(n => Node.fromJSON(n));
-      data.edges = state.edges.map(e => Edge.fromJSON(e));
-      categories = data.categories;
-      nodes = data.nodes;
-      edges = data.edges;
+      tree = JSON.parse(JSON.stringify(history[historyIndex]));
       scheduleSave();
     }
+  }
+
+  function handleAddRootChild() {
+    const newNode = {
+      id: crypto.randomUUID(),
+      text: '',
+      collapsed: true,
+      children: []
+    };
+    
+    if ($currentView === 'category' && currentCategory) {
+      // Add as child to current category
+      currentCategory.children.push(newNode);
+      currentCategory.collapsed = false;
+      tree = tree;
+      pushHistory();
+      selectedNodeId = newNode.id;
+    } else {
+      // Add as a new root node (category)
+      tree.roots.push(newNode);
+      tree = tree;
+      pushHistory();
+      selectedNodeId = newNode.id;
+    }
+    
+    // Auto-edit the new node
+    setTimeout(() => {
+      const element = document.querySelector(`[data-node-id="${newNode.id}"]`);
+      if (element) {
+        const event = new Event('dblclick', { bubbles: true });
+        const contentEl = element.querySelector('.card-content') || 
+                         element.querySelector('.node-content');
+        if (contentEl) {
+          contentEl.dispatchEvent(event);
+        }
+      }
+    }, 100);
   }
 
   function toggleSettingsMenu(e) {
@@ -297,7 +363,7 @@
   }
 
   function handleExportJSON() {
-    const dataStr = JSON.stringify({ categories, nodes, edges }, null, 2);
+    const dataStr = JSON.stringify(tree, null, 2);
     const dataBlob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(dataBlob);
     const link = document.createElement('a');
@@ -319,14 +385,9 @@
         reader.onload = async (event) => {
           try {
             const imported = JSON.parse(event.target.result);
-            if (imported.categories && imported.nodes && imported.edges) {
-              data.categories = imported.categories.map(c => Category.fromJSON(c));
-              data.nodes = imported.nodes.map(n => Node.fromJSON(n));
-              data.edges = imported.edges.map(e => Edge.fromJSON(e));
-              categories = data.categories;
-              nodes = data.nodes;
-              edges = data.edges;
-              await saveGraph(categories, nodes, edges);
+            if (imported.roots && Array.isArray(imported.roots)) {
+              tree = imported;
+              await saveTree(tree);
               pushHistory();
               alert('Import successful!');
             } else {
@@ -345,8 +406,31 @@
 
   function handleSearch(e) {
     if (e.key === 'Enter' && searchQuery.trim()) {
-      // Search handled by filtering
+      if (globalSearchMode) {
+        // Global search: expand all matching nodes
+        searchInTree(tree.roots, searchQuery.toLowerCase());
+        tree = tree;
+      }
+      // Otherwise, search is handled by view filtering
     }
+  }
+
+  function searchInTree(nodes, query) {
+    let found = false;
+    for (const node of nodes) {
+      if (node.text.toLowerCase().includes(query)) {
+        node.collapsed = false;
+        found = true;
+      }
+      if (node.children && node.children.length > 0) {
+        const childFound = searchInTree(node.children, query);
+        if (childFound) {
+          node.collapsed = false;
+          found = true;
+        }
+      }
+    }
+    return found;
   }
   
   function toggleGlobalSearch() {
@@ -360,52 +444,20 @@
     if (globalSearchMode) {
       return 'Search all notes (global)...';
     }
-    if ($currentView === 'workspace') {
-      return 'Search in workspace...';
+    if ($currentView === 'category') {
+      return 'Search in category...';
     }
     return 'Search categories...';
-  }
-
-  function handleUpdateTitle(event) {
-    const { nodeId, title } = event.detail;
-    const node = nodes.find(n => n.id === nodeId);
-    if (node) {
-      node.title = title;
-      node.touch();
-      nodes = nodes;
-      pushHistory();
-    }
-  }
-
-  function handleUpdateContent(event) {
-    const { nodeId, content } = event.detail;
-    const node = nodes.find(n => n.id === nodeId);
-    if (node) {
-      node.contentMd = content;
-      node.touch();
-      nodes = nodes;
-      scheduleSave();
-    }
-  }
-
-  function handleEditCategory(event) {
-    const { nodeId, text } = event.detail;
-    const cat = categories.find(c => c.id === nodeId);
-    if (cat) {
-      cat.title = text;
-      cat.touch();
-      categories = categories;
-      pushHistory();
-    }
   }
 </script>
 
 <svelte:body on:contextmenu|preventDefault />
 
 <div class="app">
+  <!-- Header -->
   <header class="header">
     <div class="header-left">
-      {#if $currentView === 'workspace'}
+      {#if $currentView === 'category'}
         <button 
           class="nav-btn" 
           on:click={() => router.navigateToOverview()}
@@ -417,9 +469,9 @@
       
       <h1>FEIM Notes</h1>
       
-      {#if $currentView === 'workspace' && currentCategory}
+      {#if $currentView === 'category' && currentCategory}
         <span class="breadcrumb-separator">/</span>
-        <span class="breadcrumb-current">{currentCategory.title}</span>
+        <span class="breadcrumb-current">{currentCategory.text}</span>
       {/if}
     </div>
     
@@ -435,7 +487,7 @@
       <button 
         class="action-btn primary" 
         on:click={handleAddRootChild} 
-        title={$currentView === 'workspace' ? 'Add note' : 'Add category'}
+        title={$currentView === 'category' ? 'Add note to category' : 'Add new category'}
       >
         <span class="action-icon">+</span>
       </button>
@@ -480,6 +532,7 @@
     </div>
   </header>
 
+  <!-- Main Content Area with View Switching -->
   <main class="main-content">
     {#if $currentView === 'overview'}
       <div class="overview" in:fade={{ duration: 180 }}>
@@ -489,11 +542,9 @@
               <div animate:flip={{ duration: 180, easing: quintOut }}>
                 <OverviewCard 
                   {category}
-                  {nodes}
-                  {edges}
                   {selectedNodeId}
                   on:select={handleSelect}
-                  on:edit={handleEditCategory}
+                  on:edit={handleEdit}
                   on:contextmenu={handleContextMenu}
                 />
               </div>
@@ -509,22 +560,23 @@
           </div>
         {/if}
       </div>
-    {:else if $currentView === 'workspace' && currentCategory}
+    {:else if $currentView === 'category' && currentCategory}
       <div in:fade={{ duration: 180 }}>
-        <Workspace 
+        <CategoryView 
           category={currentCategory}
-          {nodes}
-          {edges}
-          bind:selectedNodeId
+          {selectedNodeId}
+          bind:isAnyNodeEditing
+          {searchQuery}
           on:select={handleSelect}
+          on:toggle={handleToggle}
+          on:edit={handleEdit}
           on:contextmenu={handleContextMenu}
-          on:updatetitle={handleUpdateTitle}
-          on:updatecontent={handleUpdateContent}
         />
       </div>
     {/if}
   </main>
 
+  <!-- Context Menu -->
   {#if contextMenuVisible && contextMenuNode}
     <ContextMenu 
       x={contextMenuX}
@@ -533,12 +585,12 @@
       hasClipboard={!!clipboard}
       on:edit={handleMenuEdit}
       on:addChild={handleMenuAddChild}
-      on:addSibling={handleMenuLink}
+      on:addSibling={handleMenuAddSibling}
       on:delete={handleMenuDelete}
       on:copy={handleMenuCopy}
-      on:paste={() => {}}
-      on:moveUp={handleMenuRemoveEdge}
-      on:moveDown={() => {}}
+      on:paste={handleMenuPaste}
+      on:moveUp={handleMenuMoveUp}
+      on:moveDown={handleMenuMoveDown}
     />
   {/if}
 </div>
@@ -558,6 +610,7 @@
     -moz-osx-font-smoothing: grayscale;
     touch-action: manipulation;
     min-height: 100vh;
+    /* FEIM OTT texture */
     background-image: 
       radial-gradient(1200px 800px at 15% -15%, rgba(160, 140, 110, 0.05), transparent 60%),
       radial-gradient(900px 700px at 85% 120%, rgba(90, 70, 45, 0.18), transparent 60%),
@@ -586,6 +639,7 @@
     flex-direction: column;
   }
 
+  /* FEIM OTT exact header style */
   .header {
     flex-shrink: 0;
     background: #1a181d;
@@ -834,9 +888,6 @@
     flex: 1;
     position: relative;
     z-index: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
   }
   
   .overview {
